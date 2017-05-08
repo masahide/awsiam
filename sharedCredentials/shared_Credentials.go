@@ -24,15 +24,11 @@ func filename() (string, error) {
 	// Look for "AWS_SHARED_CREDENTIALS_FILE" env variable.
 	// If the env value is empty will default to current user's home directory.
 	// Linux/OSX: "$HOME/.aws/credentials"
-	// Windows:   "%USERPROFILE%\.aws\credentials"
 	if credPath := os.Getenv("AWS_SHARED_CREDENTIALS_FILE"); credPath != "" {
 		return credPath, nil
 	}
 
 	homeDir := os.Getenv("HOME") // *nix
-	if homeDir == "" {           // Windows
-		homeDir = os.Getenv("USERPROFILE")
-	}
 	if homeDir == "" {
 		return "", errUserHomeNotFound
 	}
@@ -60,11 +56,11 @@ func createFile(filePath string) error {
 	return nil
 }
 
+// Store is save accessKeys
 func Store(accessKeyID, secretAccessKey, sessionToken, profile string) error {
 	if profile == "" {
 		profile = defaultProfile
 	}
-
 	credPath, err := filename()
 	if err != nil {
 		return err
@@ -95,7 +91,11 @@ func Store(accessKeyID, secretAccessKey, sessionToken, profile string) error {
 
 	iniProfile.Key(awsSecretAccessKey).SetValue(secretAccessKey)
 
-	iniProfile.Key(awsSessionToken).SetValue(sessionToken)
+	if sessionToken == "" {
+		iniProfile.DeleteKey(awsSessionToken)
+	} else {
+		iniProfile.Key(awsSessionToken).SetValue(sessionToken)
+	}
 
 	err = config.SaveTo(credPath)
 	if err != nil {

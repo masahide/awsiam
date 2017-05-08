@@ -156,6 +156,10 @@ func isAwsErr(code string, err error) bool {
 	return false
 }
 
+type keys struct {
+	iam.AccessKeyMetadata
+}
+
 func deleteLeastUsedKey(svc *iam.IAM, username string) (string, error) {
 	params := &iam.ListAccessKeysInput{UserName: aws.String(username)}
 	laResp, err := svc.ListAccessKeys(params)
