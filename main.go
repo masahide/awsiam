@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -156,23 +157,16 @@ func isAwsErr(code string, err error) bool {
 	return false
 }
 
-type accesskey struct {
+type accessKey struct {
 	iam.AccessKeyMetadata
 	lastUsed time.Time
 }
 
-type accesskeys struct {
-	latest accesskey
-	oldest accesskey
-}
-
-func getLatestOldest(svc *iam.IAM, laResp *iam.ListAccessKeysOutput) (accesskeys, error) {
-	var res accesskeys
-	key := iam.AccessKeyMetadata{}
-	date := time.Now()
-	for _, accessKey := range laResp.AccessKeyMetadata {
-		lastUsed := *accessKey.CreateDate
-		luParams := &iam.GetAccessKeyLastUsedInput{AccessKeyId: accessKey.AccessKeyId}
+func sortAccessKeys(svc *iam.IAM, keys []*iam.AccessKeyMetadata) ([]accessKey, error) {
+	res := make([]accessKey, len(keys))
+	for id, key := range keys {
+		lastUsed := *key.CreateDate
+		luParams := &iam.GetAccessKeyLastUsedInput{AccessKeyId: key.AccessKeyId}
 		resp, err := svc.GetAccessKeyLastUsed(luParams)
 		if err != nil {
 			return res, err
@@ -180,30 +174,12 @@ func getLatestOldest(svc *iam.IAM, laResp *iam.ListAccessKeysOutput) (accesskeys
 		if resp.AccessKeyLastUsed != nil && resp.AccessKeyLastUsed.LastUsedDate != nil {
 			lastUsed = *resp.AccessKeyLastUsed.LastUsedDate
 		}
-		if lastUsed.UnixNano() < date.UnixNano() {
-			date = lastUsed
-			key = *accessKey
-		}
+		res[id].AccessKeyMetadata = *key
+		res[id].lastUsed = lastUsed
 	}
-	res.oldest.AccessKeyMetadata = key
-	res.oldest.lastUsed = date
-
-	for _, accessKey := range laResp.AccessKeyMetadata {
-		lastUsed := *accessKey.CreateDate
-		luParams := &iam.GetAccessKeyLastUsedInput{AccessKeyId: accessKey.AccessKeyId}
-		resp, err := svc.GetAccessKeyLastUsed(luParams)
-		if err != nil {
-			return res, err
-		}
-		if resp.AccessKeyLastUsed != nil && resp.AccessKeyLastUsed.LastUsedDate != nil {
-			lastUsed = *resp.AccessKeyLastUsed.LastUsedDate
-		}
-		if lastUsed.UnixNano() < date.UnixNano() {
-			date = lastUsed
-			key = *accessKey
-		}
-	}
-
+	sort.Slice(res, func(i, j int) bool {
+		return res[i].lastUsed.UnixNano() < res[j].lastUsed.UnixNano()
+	})
 	return res, nil
 }
 
@@ -213,13 +189,16 @@ func deleteLeastUsedKey(svc *iam.IAM, username string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	keys := getLatestOldest(svc, laResp)
-	if time.Since(keys.oldest.lastUsed) < keyExpiration {
-		return "", fmt.Errorf("Not expired lastUsed:%s, accessKey:%s", keys.oldest.lastUsed, keys.oldest)
+	keys, err := sortAccessKeys(svc, laResp.AccessKeyMetadata)
+	if err != nil {
+		return "", err
+	}
+	if time.Since(keys[0].lastUsed) < keyExpiration {
+		return "", fmt.Errorf("Not expired lastUsed:%s, accessKey:%s", keys[0].lastUsed, keys[0])
 	}
 	daParams := &iam.DeleteAccessKeyInput{
-		AccessKeyId: keys.oldest.AccessKeyId,
-		UserName:    keys.oldest.UserName,
+		AccessKeyId: keys[0].AccessKeyId,
+		UserName:    keys[0].UserName,
 	}
 	daResp, err := svc.DeleteAccessKey(daParams)
 	if err != nil {
