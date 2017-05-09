@@ -17,6 +17,11 @@ import (
 	"github.com/aws/aws-sdk-go/service/iam"
 )
 
+const (
+	entityAlreadyExists = "EntityAlreadyExists"
+	limitExceeded       = "LimitExceeded"
+)
+
 var (
 	// Version is version number
 	Version = "dev"
@@ -39,7 +44,7 @@ var (
 func init() {
 	flag.BoolVar(&showResult, "show", showResult, "show result")
 	flag.StringVar(&user, "addUser", user, "add user name")
-	flag.StringVar(&roleArn, "roleArn", roleArn, "role arn Ex:'arn:aws:iam::123456789012:role/role-name'")
+	flag.StringVar(&roleArn, "assumeRole", roleArn, "role arn Ex:'arn:aws:iam::123456789012:role/role-name'")
 	flag.StringVar(&roleSessionName, "roleSessionName", roleSessionName, "role session name")
 	flag.IntVar(&durationSeconds, "durationSec", durationSeconds, "duration: 900-3600")
 	flag.StringVar(&externalID, "externalId", externalID, "external ID")
@@ -91,8 +96,8 @@ func main() {
 	switch {
 	case user != "":
 		var err error
-		svc := iam.New(sess)
-		res, err = addUser(svc, user)
+		a := &awsiam{svc: iam.New(sess)}
+		res, err = a.addUser(user)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -102,10 +107,23 @@ func main() {
 	}
 }
 
-func addUser(svc *iam.IAM, username string) (string, error) {
+type iamsvc interface {
+	GetAccessKeyLastUsed(input *iam.GetAccessKeyLastUsedInput) (*iam.GetAccessKeyLastUsedOutput, error)
+	ListAccessKeys(input *iam.ListAccessKeysInput) (*iam.ListAccessKeysOutput, error)
+	CreateUser(input *iam.CreateUserInput) (*iam.CreateUserOutput, error)
+	DeleteUser(input *iam.DeleteUserInput) (*iam.DeleteUserOutput, error)
+	CreateAccessKey(input *iam.CreateAccessKeyInput) (*iam.CreateAccessKeyOutput, error)
+	DeleteAccessKey(input *iam.DeleteAccessKeyInput) (*iam.DeleteAccessKeyOutput, error)
+}
+
+type awsiam struct {
+	svc iamsvc
+}
+
+func (a *awsiam) addUser(username string) (string, error) {
 	res := ""
 	cuParams := &iam.CreateUserInput{UserName: aws.String(user)}
-	cuResp, err := svc.CreateUser(cuParams)
+	cuResp, err := a.svc.CreateUser(cuParams)
 	if isAwsErr(entityAlreadyExists, err) {
 		if !skipCreate {
 			return res, err
@@ -117,11 +135,12 @@ func addUser(svc *iam.IAM, username string) (string, error) {
 		res = cuResp.String()
 	}
 	cakParams := &iam.CreateAccessKeyInput{UserName: aws.String(user)}
-	cakResp, err := svc.CreateAccessKey(cakParams)
+	cakResp, err := a.svc.CreateAccessKey(cakParams)
 	if isAwsErr(limitExceeded, err) {
 		if !skipCreate {
 			return res, err
 		}
+		err = nil
 		res = "Cannot exceed quota for AccessKeysPerUser: n"
 	} else if err != nil {
 		return res, err
@@ -129,23 +148,33 @@ func addUser(svc *iam.IAM, username string) (string, error) {
 		res += "\n" + cakResp.String()
 		return res, nil
 	}
-	duRes, err := deleteLeastUsedKey(svc, username)
+
+	keys, err := a.getAccessKeys(username)
 	if err != nil {
 		return res, err
 	}
-	res += "\n" + duRes
-	cakResp, err = svc.CreateAccessKey(cakParams)
+	//log.Print(keys)
+	//for i := range keys {
+	//	log.Printf("%# v\n", keys[i].AccessKeyMetadata)
+	//	log.Printf("%v\n", keys[i].lastUsed)
+	//}
+	oldest := oldestUsedKey(keys)
+	if isExpired(oldest, keyExpiration) {
+		return res, fmt.Errorf("Not expired lastUsed: %s", oldest)
+	}
+	daParams := &iam.DeleteAccessKeyInput{AccessKeyId: oldest.AccessKeyId, UserName: oldest.UserName}
+	daRes, err := a.svc.DeleteAccessKey(daParams)
+	if err != nil {
+		return "", err
+	}
+	res += "\n" + daRes.String()
+	cakResp, err = a.svc.CreateAccessKey(cakParams)
 	if err != nil {
 		return res, err
 	}
 	res += "\n" + cakResp.String()
 	return res, err
 }
-
-const (
-	entityAlreadyExists = "EntityAlreadyExists"
-	limitExceeded       = "LimitExceeded"
-)
 
 func isAwsErr(code string, err error) bool {
 	if awsErr, ok := err.(awserr.Error); ok {
@@ -158,55 +187,49 @@ func isAwsErr(code string, err error) bool {
 }
 
 type accessKey struct {
-	iam.AccessKeyMetadata
 	lastUsed time.Time
+	iam.AccessKeyMetadata
 }
 
-func sortAccessKeys(svc *iam.IAM, keys []*iam.AccessKeyMetadata) ([]accessKey, error) {
+func (a accessKey) String() string {
+	return fmt.Sprintf("{ID:%s CreateAt:%s lastUsed:%s}", *a.AccessKeyId, *a.CreateDate, a.lastUsed)
+}
+
+func (a *awsiam) getLastUseds(keys []*iam.AccessKeyMetadata) ([]accessKey, error) {
 	res := make([]accessKey, len(keys))
 	for id, key := range keys {
-		lastUsed := *key.CreateDate
+		res[id].AccessKeyMetadata = *key
+		res[id].lastUsed = *key.CreateDate
 		luParams := &iam.GetAccessKeyLastUsedInput{AccessKeyId: key.AccessKeyId}
-		resp, err := svc.GetAccessKeyLastUsed(luParams)
+		resp, err := a.svc.GetAccessKeyLastUsed(luParams)
 		if err != nil {
 			return res, err
 		}
 		if resp.AccessKeyLastUsed != nil && resp.AccessKeyLastUsed.LastUsedDate != nil {
-			lastUsed = *resp.AccessKeyLastUsed.LastUsedDate
+			res[id].lastUsed = *resp.AccessKeyLastUsed.LastUsedDate
 		}
-		res[id].AccessKeyMetadata = *key
-		res[id].lastUsed = lastUsed
 	}
-	sort.Slice(res, func(i, j int) bool {
-		return res[i].lastUsed.UnixNano() < res[j].lastUsed.UnixNano()
-	})
 	return res, nil
 }
 
-func deleteLeastUsedKey(svc *iam.IAM, username string) (string, error) {
+func (a *awsiam) getAccessKeys(username string) ([]accessKey, error) {
 	params := &iam.ListAccessKeysInput{UserName: aws.String(username)}
-	laResp, err := svc.ListAccessKeys(params)
+	laResp, err := a.svc.ListAccessKeys(params)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	keys, err := sortAccessKeys(svc, laResp.AccessKeyMetadata)
+	keys, err := a.getLastUseds(laResp.AccessKeyMetadata)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	if time.Since(keys[0].lastUsed) < keyExpiration {
-		return "", fmt.Errorf("Not expired lastUsed:%s, accessKey:%s", keys[0].lastUsed, keys[0])
-	}
-	daParams := &iam.DeleteAccessKeyInput{
-		AccessKeyId: keys[0].AccessKeyId,
-		UserName:    keys[0].UserName,
-	}
-	daResp, err := svc.DeleteAccessKey(daParams)
-	if err != nil {
-		return "", err
-	}
-	return daResp.String(), nil
-	//log.Printf("leastkey:%v", leastKey)
-	//log.Printf("dryrun delete :%v", daParams)
-	return "", nil
+	sort.Slice(keys, func(i, j int) bool {
+		return keys[i].lastUsed.UnixNano() < keys[j].lastUsed.UnixNano()
+	})
+	return keys, nil
+}
 
+func oldestUsedKey(keys []accessKey) accessKey { return keys[0] }
+func newestUsedKey(keys []accessKey) accessKey { return keys[len(keys)-1] }
+func isExpired(key accessKey, expiration time.Duration) bool {
+	return time.Since(key.lastUsed) < expiration
 }
