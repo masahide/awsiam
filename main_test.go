@@ -57,6 +57,9 @@ func (s *stab) CreateAccessKey(input *iam.CreateAccessKeyInput) (*iam.CreateAcce
 func (s *stab) DeleteAccessKey(input *iam.DeleteAccessKeyInput) (*iam.DeleteAccessKeyOutput, error) {
 	return &iam.DeleteAccessKeyOutput{}, nil
 }
+func (s *stab) ListGroupsForUser(input *iam.ListGroupsForUserInput) (*iam.ListGroupsForUserOutput, error) {
+	return &iam.ListGroupsForUserOutput{}, nil
+}
 
 func TestNilString(t *testing.T) {
 	res := nilString("")
@@ -114,4 +117,54 @@ func TestGetLastUseds(t *testing.T) {
 		t.Errorf("want:testid2,get:%v", keys[1])
 	}
 	//log.Print(keys)
+}
+func TestLackingGroup(t *testing.T) {
+	res := lackingGroup([]string{"hoge", "fuga"})
+	want := []string{"infra-common", "infra-read-only"}
+	if !testEq(res, want) {
+		t.Errorf("want:%v, get:%v", want, res)
+	}
+	res = lackingGroup([]string{"infra-common", "infra-read-only"})
+	want = []string{}
+	if !testEq(res, want) {
+		t.Errorf("want:%v, get:%v", want, res)
+	}
+	res = lackingGroup([]string{"infra-read-only"})
+	want = []string{"infra-common"}
+	if !testEq(res, want) {
+		t.Errorf("want:%v, get:%v", want, res)
+	}
+	res = lackingGroup([]string{"infra-common"})
+	want = []string{"infra-read-only"}
+	if !testEq(res, want) {
+		t.Errorf("want:%v, get:%v", want, res)
+	}
+	res = lackingGroup([]string{})
+	want = []string{"infra-common", "infra-read-only"}
+	if !testEq(res, want) {
+		t.Errorf("want:%v, get:%v", want, res)
+	}
+}
+
+func testEq(a, b []string) bool {
+
+	if a == nil && b == nil {
+		return true
+	}
+
+	if a == nil || b == nil {
+		return false
+	}
+
+	if len(a) != len(b) {
+		return false
+	}
+
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+
+	return true
 }

@@ -39,11 +39,13 @@ var (
 	user            string
 	skipCreate      bool
 	keyExpiration   = time.Duration(24) * time.Hour
+	addGroupName    = "infra-common,infra-read-only"
 )
 
 func init() {
 	flag.BoolVar(&showResult, "show", showResult, "show result")
 	flag.StringVar(&user, "addUser", user, "add user name")
+	flag.StringVar(&addGroupName, "group", addGroupName, "add group names")
 	flag.StringVar(&roleArn, "assumeRole", roleArn, "role arn Ex:'arn:aws:iam::123456789012:role/role-name'")
 	flag.StringVar(&roleSessionName, "roleSessionName", roleSessionName, "role session name")
 	flag.IntVar(&durationSeconds, "durationSec", durationSeconds, "duration: 900-3600")
@@ -114,6 +116,7 @@ type iamsvc interface {
 	DeleteUser(input *iam.DeleteUserInput) (*iam.DeleteUserOutput, error)
 	CreateAccessKey(input *iam.CreateAccessKeyInput) (*iam.CreateAccessKeyOutput, error)
 	DeleteAccessKey(input *iam.DeleteAccessKeyInput) (*iam.DeleteAccessKeyOutput, error)
+	ListGroupsForUser(input *iam.ListGroupsForUserInput) (*iam.ListGroupsForUserOutput, error)
 }
 
 type awsiam struct {
@@ -210,6 +213,41 @@ func (a *awsiam) getLastUseds(keys []*iam.AccessKeyMetadata) ([]accessKey, error
 		}
 	}
 	return res, nil
+}
+
+func (a *awsiam) getGroups(username string) ([]string, error) {
+	params := &iam.ListGroupsForUserInput{UserName: aws.String(username)}
+	resp, err := a.svc.ListGroupsForUser(params)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Groups == nil {
+		return nil, nil
+	}
+	res := make([]string, len(resp.Groups))
+	for id, group := range resp.Groups {
+		res[id] = *group.GroupName
+	}
+	return res, nil
+}
+
+func lackingGroup(getGroups []string) []string {
+	addGroup := strings.Split(addGroupName, ",")
+	res := make([]string, 0, len(addGroup))
+	for _, addName := range addGroup {
+		ok := false
+	LBL1:
+		for _, getName := range getGroups {
+			if addName == getName {
+				ok = true
+				break LBL1
+			}
+		}
+		if !ok {
+			res = append(res, addName)
+		}
+	}
+	return res
 }
 
 func (a *awsiam) getAccessKeys(username string) ([]accessKey, error) {
