@@ -18,7 +18,8 @@ test:
     - test -z "$(gofmt -s -l . | tee /dev/stderr)"
     #- gometalinter --deadline 30s ./...
     - go test -race -test.v ./...
-    - goveralls -v -service circle-ci -repotoken "${COVERALLS_TOKEN}" 
+    - go test -race -v -covermode=count -coverprofile=coverage.out
+    - goveralls -v -coverprofile=coverage.out -service circle-ci -repotoken "${COVERALLS_TOKEN}" 
 deployment:
   release:
      tag: /v.*/
