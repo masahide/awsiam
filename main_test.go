@@ -33,11 +33,11 @@ func (s *stab) GetAccessKeyLastUsed(input *iam.GetAccessKeyLastUsedInput) (*iam.
 func (s *stab) ListAccessKeys(input *iam.ListAccessKeysInput) (*iam.ListAccessKeysOutput, error) {
 	return &iam.ListAccessKeysOutput{
 		AccessKeyMetadata: []*iam.AccessKeyMetadata{
-			&iam.AccessKeyMetadata{
+			{
 				AccessKeyId: aws.String("testid1"),
 				CreateDate:  aws.Time(time.Now().Add(-24 * time.Hour)),
 			},
-			&iam.AccessKeyMetadata{
+			{
 				AccessKeyId: aws.String("testid2"),
 				CreateDate:  aws.Time(time.Now().Add(-24 * 2 * time.Hour)),
 			},
@@ -90,11 +90,11 @@ func TestIsAwsErr(t *testing.T) {
 func TestGetLastUseds(t *testing.T) {
 	a := &awsiam{svc: &stabData}
 	data := []*iam.AccessKeyMetadata{
-		&iam.AccessKeyMetadata{
+		{
 			AccessKeyId: aws.String("testid1"),
 			CreateDate:  aws.Time(time.Now().Add(-24 * time.Hour)),
 		},
-		&iam.AccessKeyMetadata{
+		{
 			AccessKeyId: aws.String("testid2"),
 			CreateDate:  aws.Time(time.Now().Add(-24 * 2 * time.Hour)),
 		},
